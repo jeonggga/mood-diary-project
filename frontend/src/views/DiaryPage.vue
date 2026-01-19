@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { useAuthStore } from "../stores/auth";
 import api from "../api";
 import { LogOut, ChevronLeft, ChevronRight } from "lucide-vue-next";
@@ -21,8 +21,9 @@ interface Diary {
   id: number;
   event: string;
   mood_level: number;
-  deepFeeling?: string;
-  comforting?: string;
+  emotion_desc: string;
+  emotion_meaning: string;
+  self_talk: string;
   created_at: string;
 }
 
@@ -35,8 +36,9 @@ const isWriting = ref(false);
 const form = ref({
   mood_level: 0,
   event: "",
-  deepFeeling: "",
-  comforting: "",
+  emotion_desc: "",
+  emotion_meaning: "",
+  self_talk: "",
 });
 
 const moodOptions = [
@@ -52,11 +54,11 @@ const calendarDays = computed(() =>
   eachDayOfInterval({
     start: startOfMonth(currentDate.value),
     end: endOfMonth(currentDate.value),
-  })
+  }),
 );
 
 const monthTitle = computed(() =>
-  format(currentDate.value, "yyyy년 M월", { locale: ko })
+  format(currentDate.value, "yyyy년 M월", { locale: ko }),
 );
 
 // Get diary for a date
@@ -69,13 +71,18 @@ const selectDate = (date: Date) => {
   const diary = getDiaryForDate(date);
   if (diary) {
     form.value = { ...diary };
+    isViewMode.value = true;
   } else {
     form.value = {
       mood_level: 0,
       event: "",
-      deepFeeling: "",
-      comforting: "",
+      emotion_desc: "",
+      emotion_meaning: "",
+      self_talk: "",
     };
+    isViewMode.value = false;
+    currentStep.value = 1;
+    openSection.value = "step1";
   }
 };
 
@@ -92,53 +99,118 @@ const saveDiary = async () => {
   });
   isWriting.value = false;
   loadDiaries();
+  // Switch to View Mode
+  isViewMode.value = true;
+  triggerToast("기록 저장이 완료되었습니다!");
 };
 
-onMounted(loadDiaries);
+onMounted(async () => {
+  await loadDiaries();
+  selectDate(selectedDate.value);
+});
 
 // Get mood info
 const selectedMood = computed(() =>
-  moodOptions.find((m) => m.id === form.value.mood_level)
+  moodOptions.find((m) => m.id === form.value.mood_level),
 );
 
 // Step management
 const currentStep = ref(1);
+const openSection = ref<"step1" | "step2" | "step3" | "step4" | "all">("step1");
+const isEventInputOpen = ref(false);
 
-const accordionOpen = ref({
-  step1: false,
-  step2: false,
-  step3: false,
-});
-
-const canNextStep1 = computed(
-  () => form.value.mood_level > 0 && form.value.event.trim().length > 0
+const formattedSelectedDate = computed(() =>
+  format(selectedDate.value, "yyyy.MM.dd"),
 );
 
-const canNextStep2 = computed(() => form.value.deepFeeling.trim().length > 0);
+const canNextStep1 = computed(
+  () => form.value.mood_level > 0 && form.value.event.trim().length > 0,
+);
+
+const canNextStep2 = computed(() => form.value.emotion_desc.trim().length > 0);
+const canNextStep3 = computed(
+  () => form.value.emotion_meaning.trim().length > 0,
+);
 
 const canSave = computed(
   () =>
     form.value.mood_level &&
     form.value.event.trim() &&
-    form.value.deepFeeling.trim() &&
-    form.value.comforting.trim()
+    form.value.emotion_desc.trim() &&
+    form.value.emotion_meaning.trim() &&
+    form.value.self_talk.trim(),
 );
 
-const nextStep = () => {
+const nextStep = async () => {
   if (currentStep.value === 1 && canNextStep1.value) {
     currentStep.value = 2;
-    accordionOpen.value.step1 = true; // Step1 접기
-    accordionOpen.value.step2 = true; // Step2 열기
+    openSection.value = "step2";
+    await nextTick();
+    emotionDescInput.value?.focus();
   } else if (currentStep.value === 2 && canNextStep2.value) {
     currentStep.value = 3;
-    accordionOpen.value.step2 = true;
-    accordionOpen.value.step3 = true;
+    openSection.value = "step3";
+    await nextTick();
+    emotionMeaningInput.value?.focus();
+  } else if (currentStep.value === 3 && canNextStep3.value) {
+    currentStep.value = 4;
+    openSection.value = "step4";
+    await nextTick();
+    selfTalkInput.value?.focus();
   }
 };
 
-const toggleAccordion = (step: "step1" | "step2" | "step3") => {
-  accordionOpen.value[step] = !accordionOpen.value[step];
+const toggleSection = (section: "step1" | "step2" | "step3" | "step4") => {
+  if (section === "step1") {
+    openSection.value = "step1";
+  } else if (section === "step2" && currentStep.value >= 2) {
+    openSection.value = "step2";
+  } else if (section === "step3" && currentStep.value >= 3) {
+    openSection.value = "step3";
+  } else if (section === "step4" && currentStep.value >= 4) {
+    openSection.value = "step4";
+  }
 };
+
+const toggleEventInput = () => {
+  isEventInputOpen.value = !isEventInputOpen.value;
+};
+
+// Toast state
+const showToast = ref(false);
+const toastMessage = ref("");
+
+const triggerToast = (message: string) => {
+  toastMessage.value = message;
+  showToast.value = true;
+  setTimeout(() => {
+    showToast.value = false;
+  }, 3000); // Hide after 3 seconds
+};
+
+// View mode state
+const isViewMode = ref(false);
+
+const enableEditMode = () => {
+  isViewMode.value = false;
+  currentStep.value = 4;
+  openSection.value = "all";
+  isEventInputOpen.value = true;
+};
+
+// Select mood and auto-open event input
+const selectMood = async (id: number) => {
+  form.value.mood_level = id;
+  isEventInputOpen.value = true;
+  await nextTick();
+  eventInput.value?.focus();
+};
+
+// Input refs
+const eventInput = ref<HTMLTextAreaElement | null>(null);
+const emotionDescInput = ref<HTMLTextAreaElement | null>(null);
+const emotionMeaningInput = ref<HTMLTextAreaElement | null>(null);
+const selfTalkInput = ref<HTMLTextAreaElement | null>(null);
 
 // Get diary mood for calendar
 const getDiaryMood = (date: Date) => {
@@ -248,147 +320,363 @@ const getDiaryMood = (date: Date) => {
       <div
         class="w-[40%] p-6 bg-white rounded-xl border border-gray-200 space-y-4"
       >
-        <!-- STEP 1 (항상 노출) -->
-        <div>
-          <p class="font-bold mb-2">오늘 하루 어땠나요?</p>
-          <div class="flex gap-4 mb-4">
-            <button
-              v-for="mood in moodOptions"
-              :key="mood.id"
-              @click="form.mood_level = mood.id"
-              :class="[
-                'w-20 h-20 rounded-full flex items-center justify-center bg-white transition-all duration-150 hover:scale-110',
-                form.mood_level === mood.id
-                  ? 'ring-2 ring-black'
-                  : 'ring-1 ring-gray-200',
-              ]"
-            >
-              <img
-                :src="mood.img"
-                :alt="mood.label"
-                class="w-14 h-14 object-contain"
-              />
-            </button>
-          </div>
-
-          <p class="font-bold mb-2">무슨 일이 있었나요?</p>
-          <textarea
-            v-model="form.event"
-            class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400"
-            placeholder="사실 위주로 담백하게 기록해 보세요."
-          />
-
+        <!-- RIGHT HEADER: Date & Edit Button -->
+        <div
+          class="flex justify-between items-center border-b border-gray-100 pb-4"
+        >
+          <!-- Left aligned date -->
+          <h2 class="font-bold text-xl text-gray-800">
+            {{ formattedSelectedDate }}
+          </h2>
           <button
-            class="mt-2 px-6 py-2 rounded-md transition"
-            :class="
-              canNextStep1
-                ? 'bg-black text-white hover:bg-gray-900'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            "
-            :disabled="!canNextStep1"
-            @click="nextStep"
+            v-if="isViewMode"
+            @click="enableEditMode"
+            class="text-xs text-gray-400 hover:text-black underline"
           >
-            다음
+            수정하기
           </button>
+          <div v-else class="w-8"></div>
+          <!-- Spacer if no button -->
         </div>
 
-        <!-- STEP1 아코디언 요약 -->
-        <div v-if="accordionOpen.step1 && currentStep > 1">
-          <div
-            class="flex justify-between items-center cursor-pointer bg-gray-50 p-2 rounded"
-            @click="toggleAccordion('step1')"
-          >
-            <p class="font-bold">오늘 하루 어땠나요? + 무슨 일이 있었나요?</p>
-            <div class="flex items-center gap-2">
-              <img
-                v-if="form.mood_level"
-                :src="selectedMood?.img"
-                class="w-6 h-6"
-              />
-              <img
-                src="/images/arrow-down.png"
-                class="w-4 h-4 transition-transform"
-                :class="{ 'rotate-180': accordionOpen.step1 }"
-              />
+        <!-- READ ONLY VIEW -->
+        <div v-if="isViewMode" class="space-y-6 animate-fadeIn">
+          <!-- Mood Display -->
+          <div class="flex flex-col items-center">
+            <img
+              :src="selectedMood?.img"
+              class="w-24 h-24 object-contain mb-2"
+            />
+            <p class="font-bold text-xl">{{ selectedMood?.label }}</p>
+          </div>
+
+          <!-- Sections -->
+          <div class="space-y-4">
+            <div class="bg-gray-50 p-4 rounded-xl">
+              <p class="text-xs text-gray-400 mb-1 font-bold">
+                무슨 일이 있었나요?
+              </p>
+              <p class="text-gray-800 whitespace-pre-wrap leading-relaxed">
+                {{ form.event }}
+              </p>
+            </div>
+
+            <div class="bg-gray-50 p-4 rounded-xl">
+              <p class="text-xs text-gray-400 mb-1 font-bold">
+                무슨 감정이 들었나요?
+              </p>
+              <p class="text-gray-800 whitespace-pre-wrap leading-relaxed">
+                {{ form.emotion_desc }}
+              </p>
+            </div>
+
+            <div class="bg-gray-50 p-4 rounded-xl">
+              <p class="text-xs text-gray-400 mb-1 font-bold">감정의 의미</p>
+              <p class="text-gray-800 whitespace-pre-wrap leading-relaxed">
+                {{ form.emotion_meaning }}
+              </p>
+            </div>
+
+            <div class="bg-gray-50 p-4 rounded-xl">
+              <p class="text-xs text-gray-400 mb-1 font-bold">
+                나에게 해주는 말
+              </p>
+              <p class="text-gray-800 whitespace-pre-wrap leading-relaxed">
+                {{ form.self_talk }}
+              </p>
             </div>
           </div>
-          <div
-            v-if="accordionOpen.step1"
-            class="mt-2 p-2 bg-white rounded border border-gray-200"
-          >
-            <p class="mb-1"><strong>감정:</strong> {{ selectedMood?.label }}</p>
-            <p><strong>사건:</strong> {{ form.event }}</p>
-          </div>
         </div>
 
-        <!-- STEP2 -->
-        <div v-if="currentStep >= 2">
-          <div
-            class="flex justify-between items-center cursor-pointer"
-            @click="toggleAccordion('step2')"
-          >
-            <p class="font-bold">더 깊게 자신의 감정을 써보세요</p>
-            <img
-              src="/images/arrow-down.png"
-              class="w-4 h-4 transition-transform"
-              :class="{ 'rotate-180': accordionOpen.step2 }"
-            />
-          </div>
-          <div v-if="accordionOpen.step2" class="mt-2">
-            <textarea
-              v-model="form.deepFeeling"
-              class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400"
-              placeholder="마음속 깊은 감정을 자유롭게 기록해 보세요."
-            />
-            <button
-              class="mt-2 px-6 py-2 rounded-md transition"
-              :class="
-                canNextStep2
-                  ? 'bg-black text-white hover:bg-gray-900'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              "
-              :disabled="!canNextStep2"
-              @click="nextStep"
+        <!-- EDIT FORM -->
+        <div v-else>
+          <!-- STEP 1 -->
+          <div class="pb-4">
+            <!-- Header / Summary -->
+            <div
+              class="flex justify-between items-center py-2 transition-colors"
+              :class="{ 'cursor-pointer': openSection !== 'all' }"
+              @click="openSection !== 'all' && toggleSection('step1')"
             >
-              다음
-            </button>
-          </div>
-        </div>
+              <div class="flex items-center gap-2">
+                <span
+                  class="flex items-center justify-center w-6 h-6 rounded-full bg-black text-white text-xs font-bold"
+                  >1</span
+                >
+                <p class="font-bold text-md">오늘 하루 어땠나요?</p>
+              </div>
+              <!-- Summary & Arrow -->
+              <div class="flex items-center gap-4">
+                <div
+                  v-if="
+                    openSection !== 'step1' &&
+                    openSection !== 'all' &&
+                    form.mood_level
+                  "
+                  class="flex items-center"
+                >
+                  <img
+                    :src="selectedMood?.img"
+                    class="w-8 h-8 object-contain"
+                  />
+                </div>
+                <img
+                  v-if="openSection !== 'all'"
+                  src="/images/arrow-down.png"
+                  class="w-4 h-4 transition-transform duration-300"
+                  :class="{
+                    'rotate-180':
+                      openSection === 'step1' || openSection === 'all',
+                  }"
+                />
+              </div>
+            </div>
 
-        <!-- STEP3 -->
-        <div v-if="currentStep >= 3">
-          <div
-            class="flex justify-between items-center cursor-pointer"
-            @click="toggleAccordion('step3')"
-          >
-            <p class="font-bold">나에게 따뜻한 위로를 써보세요</p>
-            <img
-              src="/images/arrow-down.png"
-              class="w-4 h-4 transition-transform"
-              :class="{ 'rotate-180': accordionOpen.step3 }"
-            />
-          </div>
-          <div v-if="accordionOpen.step3" class="mt-2">
-            <textarea
-              v-model="form.comforting"
-              class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400"
-              placeholder="자신에게 위로와 격려를 적어보세요."
-            />
-            <button
-              class="mt-2 px-6 py-2 rounded-md transition"
-              :class="
-                canSave
-                  ? 'bg-black text-white hover:bg-gray-900'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              "
-              :disabled="!canSave"
-              @click="saveDiary"
+            <!-- Content -->
+            <div
+              v-show="openSection === 'step1' || openSection === 'all'"
+              class="mt-4 animate-fadeIn"
             >
-              기록 저장하기
-            </button>
+              <!-- Mood Selection -->
+              <div class="flex gap-4 mb-6 justify-center">
+                <button
+                  v-for="mood in moodOptions"
+                  :key="mood.id"
+                  @click="selectMood(mood.id)"
+                  :class="[
+                    'w-16 h-16 rounded-full flex items-center justify-center bg-white transition-all duration-200 hover:scale-110',
+                    form.mood_level === mood.id
+                      ? 'ring-2 ring-black scale-110'
+                      : 'ring-1 ring-gray-200 grayscale hover:grayscale-0',
+                  ]"
+                >
+                  <img
+                    :src="mood.img"
+                    :alt="mood.label"
+                    class="w-12 h-12 object-contain"
+                  />
+                </button>
+              </div>
+
+              <!-- Event Section (Accordion) -->
+              <div class="mb-4">
+                <div
+                  class="flex justify-between items-center bg-gray-50 p-3 rounded-lg transition-colors mb-2"
+                  :class="{ 'cursor-pointer': openSection !== 'all' }"
+                  @click="openSection !== 'all' && toggleEventInput()"
+                >
+                  <p class="font-bold text-sm text-gray-700">
+                    무슨 일이 있었나요?
+                  </p>
+                  <img
+                    v-if="openSection !== 'all'"
+                    src="/images/arrow-down.png"
+                    class="w-3 h-3 transition-transform duration-300"
+                    :class="{
+                      'rotate-180': isEventInputOpen || openSection === 'all',
+                    }"
+                  />
+                </div>
+                <div v-show="isEventInputOpen || openSection === 'all'">
+                  <textarea
+                    ref="eventInput"
+                    v-model="form.event"
+                    class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400"
+                    placeholder="사실 위주로 담백하게 기록해 보세요."
+                  />
+                </div>
+              </div>
+
+              <button
+                v-if="openSection !== 'all'"
+                class="w-full py-3 rounded-xl font-bold transition-all"
+                :class="
+                  canNextStep1
+                    ? 'bg-black text-white hover:bg-gray-800 shadow-md transform active:scale-95'
+                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                "
+                :disabled="!canNextStep1"
+                @click="nextStep"
+              >
+                다음
+              </button>
+            </div>
+          </div>
+
+          <!-- STEP 2 (NEW) -->
+          <div v-if="currentStep >= 2" class="pb-4">
+            <div
+              class="flex justify-between items-center py-2 transition-colors"
+              :class="{ 'cursor-pointer': openSection !== 'all' }"
+              @click="openSection !== 'all' && toggleSection('step2')"
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  class="flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold"
+                  :class="
+                    openSection === 'step2'
+                      ? 'bg-black text-white'
+                      : 'bg-gray-200 text-gray-500'
+                  "
+                  >2</span
+                >
+                <p class="font-bold text-md">무슨 감정이 들었나요?</p>
+              </div>
+              <img
+                v-if="openSection !== 'all'"
+                src="/images/arrow-down.png"
+                class="w-4 h-4 transition-transform duration-300"
+                :class="{
+                  'rotate-180': openSection === 'step2',
+                }"
+              />
+            </div>
+
+            <div
+              v-show="openSection === 'step2' || openSection === 'all'"
+              class="mt-4 animate-fadeIn"
+            >
+              <textarea
+                ref="emotionDescInput"
+                v-model="form.emotion_desc"
+                class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400 mb-4"
+                placeholder="그때 느꼈던 감정을 구체적인 단어로 표현해 보세요. (예: 억울함, 서운함, 홀가분함)"
+              />
+              <button
+                v-if="openSection !== 'all'"
+                class="w-full py-3 rounded-xl font-bold transition-all"
+                :class="
+                  canNextStep2
+                    ? 'bg-black text-white hover:bg-gray-800 shadow-md transform active:scale-95'
+                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                "
+                :disabled="!canNextStep2"
+                @click="nextStep"
+              >
+                다음
+              </button>
+            </div>
+          </div>
+
+          <!-- STEP 3 (OLD Step 2) -->
+          <div v-if="currentStep >= 3" class="pb-4">
+            <div
+              class="flex justify-between items-center py-2 transition-colors"
+              :class="{ 'cursor-pointer': openSection !== 'all' }"
+              @click="openSection !== 'all' && toggleSection('step3')"
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  class="flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold"
+                  :class="
+                    openSection === 'step3'
+                      ? 'bg-black text-white'
+                      : 'bg-gray-200 text-gray-500'
+                  "
+                  >3</span
+                >
+                <p class="font-bold text-md">더 깊게 자신의 감정을 써보세요</p>
+              </div>
+              <img
+                v-if="openSection !== 'all'"
+                src="/images/arrow-down.png"
+                class="w-4 h-4 transition-transform duration-300"
+                :class="{
+                  'rotate-180': openSection === 'step3',
+                }"
+              />
+            </div>
+
+            <div
+              v-show="openSection === 'step3' || openSection === 'all'"
+              class="mt-4 animate-fadeIn"
+            >
+              <textarea
+                ref="emotionMeaningInput"
+                v-model="form.emotion_meaning"
+                class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400 mb-4"
+                placeholder="이 감정이 나에게 어떤 의미인지, 왜 그런 마음이 들었는지 적어보세요."
+              />
+              <button
+                v-if="openSection !== 'all'"
+                class="w-full py-3 rounded-xl font-bold transition-all"
+                :class="
+                  canNextStep3
+                    ? 'bg-black text-white hover:bg-gray-800 shadow-md transform active:scale-95'
+                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                "
+                :disabled="!canNextStep3"
+                @click="nextStep"
+              >
+                다음
+              </button>
+            </div>
+          </div>
+
+          <!-- STEP 4 (OLD Step 3) -->
+          <div v-if="currentStep >= 4" class="pb-4">
+            <div
+              class="flex justify-between items-center py-2 transition-colors"
+              :class="{ 'cursor-pointer': openSection !== 'all' }"
+              @click="openSection !== 'all' && toggleSection('step4')"
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  class="flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold"
+                  :class="
+                    openSection === 'step4'
+                      ? 'bg-black text-white'
+                      : 'bg-gray-200 text-gray-500'
+                  "
+                  >4</span
+                >
+                <p class="font-bold text-md">나에게 따뜻한 위로를 써보세요</p>
+              </div>
+              <img
+                v-if="openSection !== 'all'"
+                src="/images/arrow-down.png"
+                class="w-4 h-4 transition-transform duration-300"
+                :class="{
+                  'rotate-180': openSection === 'step4',
+                }"
+              />
+            </div>
+
+            <div
+              v-show="openSection === 'step4' || openSection === 'all'"
+              class="mt-4 animate-fadeIn"
+            >
+              <textarea
+                ref="selfTalkInput"
+                v-model="form.self_talk"
+                class="w-full h-32 border border-gray-200 rounded-lg p-4 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-400 mb-4"
+                placeholder="자신에게 해주고 싶은 따뜻한 말 한마디를 적어보세요."
+              />
+              <button
+                class="w-full py-3 rounded-xl font-bold transition-all"
+                :class="
+                  canSave
+                    ? 'bg-black text-white hover:bg-gray-800 shadow-md transform active:scale-95'
+                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                "
+                :disabled="!canSave"
+                @click="saveDiary"
+              >
+                기록 저장하기
+              </button>
+            </div>
           </div>
         </div>
+        <!-- End of Edit Form -->
       </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div
+      v-if="showToast"
+      class="fixed top-20 left-1/2 transform -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full shadow-lg transition-all duration-300 z-50 animate-fadeIn"
+    >
+      {{ toastMessage }}
     </div>
   </div>
 </template>
