@@ -1,8 +1,17 @@
 <script setup lang="ts">
+// [DiaryPage.vue] 메인 일기장 페이지
+// - 달력을 보여주고, 날짜별 감정 일기를 작성/조회하는 핵심 기능을 담당합니다.
+
+// Vue 핵심 기능들을 가져옵니다.
+// - ref: 반응형 데이터 (값이 바뀌면 화면 갱신)
+// - computed: 계산된 속성 (다른 데이터가 바뀌면 자동으로 다시 계산됨)
+// - onMounted: 컴포넌트가 화면에 처음 나타날 때 실행되는 라이프사이클 훅
+// - nextTick: 화면 갱신이 완료된 직후에 실행할 로직을 위해 사용
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useAuthStore } from "../stores/auth";
 import api from "../api";
-import { LogOut, ChevronLeft, ChevronRight } from "lucide-vue-next";
+import { LogOut, ChevronLeft, ChevronRight } from "lucide-vue-next"; // 아이콘들
+// 날짜 관련 라이브러리 (date-fns)
 import {
   format,
   startOfMonth,
@@ -14,25 +23,40 @@ import {
   parseISO,
   isToday,
 } from "date-fns";
-import { ko } from "date-fns/locale";
+import { ko } from "date-fns/locale"; // 한국어 날짜 포맷 지원
 
-// Diary interface
+// ------------------------------------------------------------------
+// 1. 타입 정의 (TypeScript Interface)
+// ------------------------------------------------------------------
+// 일기 데이터의 구조를 정의합니다. 백엔드 DB 구조와 일치해야 합니다.
 interface Diary {
   id: number;
-  event: string;
-  mood_level: number;
-  emotion_desc: string;
-  emotion_meaning: string;
-  self_talk: string;
-  created_at: string;
+  event: string; // 있었던 일 (사실)
+  mood_level: number; // 감정 점수/ID (1~5)
+  emotion_desc: string; // 감정 단어/묘사
+  emotion_meaning: string; // 감정의 의미
+  self_talk: string; // 스스로에게 해주는 말 (위로)
+  created_at: string; // 작성일 (ISO String)
 }
 
+// ------------------------------------------------------------------
+// 2. 상태(State) 변수
+// ------------------------------------------------------------------
 const authStore = useAuthStore();
+
+// 불러온 일기 목록 전체를 저장하는 배열
 const diaries = ref<Diary[]>([]);
+
+// 달력에서 현재 보여주고 있는 '기준 날짜' (월 단위 이동 시 사용)
 const currentDate = ref(new Date());
+
+// 사용자가 클릭해서 선택한 '특정 날짜' (일기 작성/조회 대상)
 const selectedDate = ref(new Date());
+
+// 현재 작성 중인지(로딩/저장 중) 상태 (중복 클릭 방지 등)
 const isWriting = ref(false);
 
+// 일기 작성 폼 데이터 (v-model로 입력창과 연결됨)
 const form = ref({
   mood_level: 0,
   event: "",
@@ -41,6 +65,7 @@ const form = ref({
   self_talk: "",
 });
 
+// 제공되는 감정 이모티콘 옵션들
 const moodOptions = [
   { id: 1, label: "행복해", img: "/images/emoji_1.png" },
   { id: 2, label: "평온해", img: "/images/emoji_2.png" },
@@ -49,7 +74,12 @@ const moodOptions = [
   { id: 5, label: "화나", img: "/images/emoji_5.png" },
 ];
 
-// Calendar calculations
+// ------------------------------------------------------------------
+// 3. 계산된 속성 (Computed) - 달력 로직
+// ------------------------------------------------------------------
+
+// 현재 보고 있는 달(Month)의 모든 날짜 리스트를 생성합니다.
+// 예: 2024년 1월이면 1월 1일 ~ 1월 31일까지의 Date 객체 배열을 만듭니다.
 const calendarDays = computed(() =>
   eachDayOfInterval({
     start: startOfMonth(currentDate.value),
@@ -57,22 +87,30 @@ const calendarDays = computed(() =>
   }),
 );
 
+// 달력 상단에 표시할 제목 (예: "2024년 1월")
 const monthTitle = computed(() =>
   format(currentDate.value, "yyyy년 M월", { locale: ko }),
 );
 
-// Get diary for a date
+// ------------------------------------------------------------------
+// 4. 메서드 (함수) - 일기 데이터 처리
+// ------------------------------------------------------------------
+
+// [조회] 특정 날짜에 작성된 일기를 diaries 배열에서 찾아 반환합니다.
 const getDiaryForDate = (date: Date) =>
   diaries.value.find((d) => isSameDay(parseISO(d.created_at), date));
 
-// When a date is selected
+// [선택] 달력에서 날짜를 클릭했을 때 실행됩니다.
 const selectDate = (date: Date) => {
   selectedDate.value = date;
   const diary = getDiaryForDate(date);
+
   if (diary) {
-    form.value = { ...diary };
+    // 해당 날짜에 일기가 이미 있다면 -> 내용을 폼에 채우고 '조회 모드'로 설정
+    form.value = { ...diary }; // 객체 복사
     isViewMode.value = true;
   } else {
+    // 일기가 없다면 -> 폼을 초기화하고 '작성 모드'로 설정 (Step 1부터 시작)
     form.value = {
       mood_level: 0,
       event: "",
@@ -86,52 +124,69 @@ const selectDate = (date: Date) => {
   }
 };
 
-// Load diaries from API
+// [API] 서버에서 모든 일기 목록을 가져옵니다.
 const loadDiaries = async () => {
   const res = await api.get("/diaries");
   diaries.value = res.data;
 };
 
+// [API] 작성한 일기를 서버에 저장합니다.
 const saveDiary = async () => {
   await api.post("/diaries", {
     ...form.value,
+    // 선택된 날짜를 ISO 문자열 포맷으로 변환해서 전송
     created_at: selectedDate.value.toISOString(),
   });
   isWriting.value = false;
+
+  // 저장 후 목록을 다시 불러와서 화면(달력의 이모티콘 등)을 갱신합니다.
   loadDiaries();
-  // Switch to View Mode
+  // 저장 완료 후 '조회 모드'로 전환하여 작성 내용을 보여줍니다.
   isViewMode.value = true;
+  // 저장 완료 안내 Toast 메시지 띄우기
   triggerToast("기록 저장이 완료되었습니다!");
 };
 
+// [초기화] 컴포넌트 마운트 시 실행
 onMounted(async () => {
-  await loadDiaries();
-  selectDate(selectedDate.value);
+  await loadDiaries(); // 데이터 불러오기
+  selectDate(selectedDate.value); // 오늘 날짜 선택 상태로 시작
 });
 
-// Get mood info
+// 선택된 감정 ID에 해당하는 이모티콘/라벨 정보를 찾습니다. (상세 조회용)
 const selectedMood = computed(() =>
   moodOptions.find((m) => m.id === form.value.mood_level),
 );
 
-// Step management
+// ------------------------------------------------------------------
+// 5. 단계별 작성(Step) 관리 로직
+// ------------------------------------------------------------------
+// 현재 작성 중인 단계 (1~4)
 const currentStep = ref(1);
+
+// 아코디언 메뉴 중 열려있는 섹션 (step1, step2, ... all)
 const openSection = ref<"step1" | "step2" | "step3" | "step4" | "all">("step1");
+
+// Step 1에서 감정 선택 후 텍스트 입력창이 열려있는지 여부
 const isEventInputOpen = ref(false);
 
+// 선택된 날짜를 "YYYY.MM.DD" 형식으로 포맷팅 (우측 헤더 표시용)
 const formattedSelectedDate = computed(() =>
   format(selectedDate.value, "yyyy.MM.dd"),
 );
 
+// [유효성 검사] 각 단계별로 '다음' 버튼 활성화 조건
+// Step 1: 감정을 선택하고 + 사건 내용을 입력했는지
 const canNextStep1 = computed(
   () => form.value.mood_level > 0 && form.value.event.trim().length > 0,
 );
-
+// Step 2, 3: 내용을 입력했는지
 const canNextStep2 = computed(() => form.value.emotion_desc.trim().length > 0);
 const canNextStep3 = computed(
   () => form.value.emotion_meaning.trim().length > 0,
 );
 
+// 전체 저장 가능 여부 (모든 필드가 채워졌는지)
 const canSave = computed(
   () =>
     form.value.mood_level &&
@@ -141,12 +196,13 @@ const canSave = computed(
     form.value.self_talk.trim(),
 );
 
+// [다음] 버튼 클릭 시 다음 단계로 이동하고, 해당 입력창에 포커스를 줍니다.
 const nextStep = async () => {
   if (currentStep.value === 1 && canNextStep1.value) {
-    currentStep.value = 2;
-    openSection.value = "step2";
-    await nextTick();
-    emotionDescInput.value?.focus();
+    currentStep.value = 2; // 단계 증가
+    openSection.value = "step2"; // 아코디언 펼치기
+    await nextTick(); // 화면 갱신 기다리기
+    emotionDescInput.value?.focus(); // 입력창 포커스
   } else if (currentStep.value === 2 && canNextStep2.value) {
     currentStep.value = 3;
     openSection.value = "step3";
@@ -160,7 +216,9 @@ const nextStep = async () => {
   }
 };
 
+// 아코디언 헤더 클릭 시 섹션을 토글하는 함수
 const toggleSection = (section: "step1" | "step2" | "step3" | "step4") => {
+  // 이미 진행된 단계(currentStep)까지만 열 수 있도록 제한
   if (section === "step1") {
     openSection.value = "step1";
   } else if (section === "step2" && currentStep.value >= 2) {
@@ -176,46 +234,54 @@ const toggleEventInput = () => {
   isEventInputOpen.value = !isEventInputOpen.value;
 };
 
-// Toast state
+// ------------------------------------------------------------------
+// 6. UI 상태 및 헬퍼
+// ------------------------------------------------------------------
+
+// Toast(저장 완료 알림) 관련 상태
 const showToast = ref(false);
 const toastMessage = ref("");
 
+// Toast를 띄우고 3초 뒤에 끄는 헬퍼 함수
 const triggerToast = (message: string) => {
   toastMessage.value = message;
   showToast.value = true;
   setTimeout(() => {
     showToast.value = false;
-  }, 3000); // Hide after 3 seconds
+  }, 3000); // 3초 후 숨김
 };
 
-// View mode state
+// [조회 모드] vs [편집 모드] 플래그
+// true: 이미 작성된 일기를 볼 때 / false: 새로 작성하거나 수정할 때
 const isViewMode = ref(false);
 
+// [수정하기] 버튼 클릭 시 '편집 모드'로 진입
 const enableEditMode = () => {
   isViewMode.value = false;
-  currentStep.value = 4;
-  openSection.value = "all";
+  currentStep.value = 4; // 모든 단계를 완료한 상태로 간주
+  openSection.value = "all"; // 모든 섹션을 펼침
   isEventInputOpen.value = true;
 };
 
-// Select mood and auto-open event input
+// 감정 이모티콘 선택 시 처리
 const selectMood = async (id: number) => {
   form.value.mood_level = id;
-  isEventInputOpen.value = true;
+  isEventInputOpen.value = true; // 텍스트 입력창 열기
   await nextTick();
-  eventInput.value?.focus();
+  eventInput.value?.focus(); // 텍스트 입력창으로 커서 이동
 };
 
-// Input refs
+// DOM 요소 접근을 위한 Refs (focus 주기 위해 사용)
 const eventInput = ref<HTMLTextAreaElement | null>(null);
 const emotionDescInput = ref<HTMLTextAreaElement | null>(null);
 const emotionMeaningInput = ref<HTMLTextAreaElement | null>(null);
 const selfTalkInput = ref<HTMLTextAreaElement | null>(null);
 
-// Get diary mood for calendar
+// 달력 날짜 칸에 표시할 이모티콘을 찾습니다.
 const getDiaryMood = (date: Date) => {
   const diary = getDiaryForDate(date);
   if (!diary) return null;
+  // 일기가 있으면 해당 감정 ID에 맞는 이모티콘 정보를 반환
   return moodOptions.find((m) => m.id === diary.mood_level) || null;
 };
 </script>
